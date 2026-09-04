@@ -4,28 +4,22 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Rounded container -->
     <path
-        android:fillColor="#FFFFFFFF"
+        android:fillColor="#FF000000"
         android:pathData="M30,32h48c4.4,0 8,3.6 8,8v28c0,4.4 -3.6,8 -8,8H30c-4.4,0 -8,-3.6 -8,-8V40c0,-4.4 3.6,-8 8,-8z" />
-    <!-- Play circle -->
     <path
-        android:fillColor="#0D47A1"
+        android:fillColor="#FF000000"
         android:pathData="M54,36c-8.3,0 -15,6.7 -15,15s6.7,15 15,15 15,-6.7 15,-15 -6.7,-15 -15,-15z" />
-    <!-- Play triangle -->
     <path
         android:fillColor="#FFFFFFFF"
         android:pathData="M49,43.5v15l13,-7.5z" />
-    <!-- Download shaft -->
     <path
-        android:fillColor="#0D47A1"
+        android:fillColor="#FF000000"
         android:pathData="M51,70h6v6h-6z" />
-    <!-- Download head -->
     <path
-        android:fillColor="#0D47A1"
+        android:fillColor="#FF000000"
         android:pathData="M42,76l12,10 12,-10z" />
-    <!-- Download tray -->
     <path
-        android:fillColor="#0D47A1"
+        android:fillColor="#FF000000"
         android:pathData="M42,88h24v3.5H42z" />
 </vector>
