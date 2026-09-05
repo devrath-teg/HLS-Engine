@@ -13,7 +13,6 @@ import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadHelper
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
-import androidx.media3.exoplayer.offline.DownloadService
 import com.istudio.hls_engine.download.api.HlsDownloadEngine
 import com.istudio.hls_engine.download.api.HlsDownloadState
 import com.istudio.hls_engine.download.api.HlsEnqueueRequest
@@ -27,56 +26,62 @@ import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
 
 /**
- * Media3-backed [HlsDownloadEngine] — drop into `core:download` and wire from
- * `LiskovDownloadManager` for `INSIDER_HLS`.
+ * Media3-backed [HlsDownloadEngine] using in-process [DownloadManager] only
+ * (no [androidx.media3.exoplayer.offline.DownloadService] / no notification).
+ *
+ * Downloads continue while the app process is alive (including backgrounded UI).
+ * If the process is killed, active downloads stop.
  */
 @OptIn(UnstableApi::class)
 class Media3HlsDownloadEngine(
     context: Context,
-    private val downloadServiceClass: Class<out DownloadService> = HlsDownloadService::class.java,
 ) : HlsDownloadEngine {
 
     private val appContext = context.applicationContext
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloadManager = DownloadComponents.getDownloadManager(appContext)
 
+    init {
+        // Process death leaves rows as DOWNLOADING/QUEUED in DownloadIndex. Without a
+        // DownloadService those jobs are dead — clear them so UI doesn't stick on
+        // indeterminate "Downloading…".
+        downloadManager.pauseDownloads()
+        if (downloadManager.isInitialized) {
+            removeInterruptedDownloads()
+        } else {
+            downloadManager.addListener(
+                object : DownloadManager.Listener {
+                    override fun onInitialized(downloadManager: DownloadManager) {
+                        removeInterruptedDownloads()
+                        downloadManager.removeListener(this)
+                    }
+                },
+            )
+        }
+    }
+
     override suspend fun enqueue(request: HlsEnqueueRequest): Result<Unit> = runCatching {
         val existing = downloadManager.downloadIndex.getDownload(request.contentId)
-        if (existing != null &&
-            (existing.state == Download.STATE_DOWNLOADING ||
-                existing.state == Download.STATE_QUEUED ||
-                existing.state == Download.STATE_COMPLETED)
-        ) {
+        if (existing != null && existing.state == Download.STATE_COMPLETED) {
             return@runCatching
+        }
+        // Replace any leftover incomplete entry for this id.
+        if (existing != null) {
+            downloadManager.removeDownload(request.contentId)
         }
 
         val media3Request = prepareDownloadRequest(request)
-        DownloadService.sendAddDownload(
-            appContext,
-            downloadServiceClass,
-            media3Request,
-            /* foreground= */ true,
-        )
+        downloadManager.addDownload(media3Request)
+        downloadManager.resumeDownloads()
     }
 
     override fun pause(contentId: String) {
-        DownloadService.sendSetStopReason(
-            appContext,
-            downloadServiceClass,
-            contentId,
-            STOP_REASON_USER,
-            /* foreground= */ false,
-        )
+        downloadManager.setStopReason(contentId, STOP_REASON_USER)
     }
 
     override fun resume(contentId: String) {
-        DownloadService.sendSetStopReason(
-            appContext,
-            downloadServiceClass,
-            contentId,
-            Download.STOP_REASON_NONE,
-            /* foreground= */ true,
-        )
+        downloadManager.setStopReason(contentId, Download.STOP_REASON_NONE)
+        downloadManager.resumeDownloads()
     }
 
     override fun cancel(contentId: String) {
@@ -85,12 +90,26 @@ class Media3HlsDownloadEngine(
     }
 
     override fun remove(contentId: String) {
-        DownloadService.sendRemoveDownload(
-            appContext,
-            downloadServiceClass,
-            contentId,
-            /* foreground= */ false,
-        )
+        downloadManager.removeDownload(contentId)
+    }
+
+    /**
+     * Treats non-completed downloads as cancelled after process death.
+     * Completed offline assets are kept.
+     */
+    private fun removeInterruptedDownloads() {
+        val idsToRemove = mutableListOf<String>()
+        downloadManager.downloadIndex.getDownloads().use { cursor ->
+            while (cursor.moveToNext()) {
+                val download = cursor.download
+                if (download.state != Download.STATE_COMPLETED) {
+                    idsToRemove += download.request.id
+                }
+            }
+        }
+        idsToRemove.forEach { id ->
+            downloadManager.removeDownload(id)
+        }
     }
 
     override fun getState(contentId: String): HlsDownloadState {
@@ -102,7 +121,6 @@ class Media3HlsDownloadEngine(
     override fun observeStates(): Flow<Map<String, HlsDownloadState>> = callbackFlow {
         fun snapshot(): Map<String, HlsDownloadState> {
             val result = linkedMapOf<String, HlsDownloadState>()
-            // Live in-memory downloads have the freshest percentDownloaded.
             downloadManager.currentDownloads.forEach { download ->
                 result[download.request.id] = download.toHlsState()
             }
@@ -122,7 +140,6 @@ class Media3HlsDownloadEngine(
                     it is HlsDownloadState.Removing
             }
 
-        // Media3 does not notify on every progress tick — poll while work is active.
         val progressTicker = object : Runnable {
             override fun run() {
                 val states = snapshot()
@@ -249,7 +266,6 @@ class Media3HlsDownloadEngine(
         }
     }
 
-    /** Media3 uses -1 when percent is unknown; never surface that in UI. */
     private fun Download.normalizedPercent(): Float {
         val raw = percentDownloaded
         return if (raw < 0f) 0f else raw.coerceIn(0f, 100f)

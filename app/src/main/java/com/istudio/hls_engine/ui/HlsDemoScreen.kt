@@ -226,7 +226,9 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
                             ),
                         )
                         status = result.fold(
-                            onSuccess = { "Download running in DownloadService (survives app close)" },
+                            onSuccess = {
+                                "Download running in-process (stops if app is killed)"
+                            },
                             onFailure = { "Enqueue failed: ${it.message}" },
                         )
                     }
@@ -253,8 +255,9 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "UI talks only to HlsDownloadEngine + HlsOfflineLocator — the same " +
-                "boundaries LiskovDownloadManager / PlayerKit should use (AT-331).",
+            text = "Downloads use in-process Media3 DownloadManager (no notification). " +
+                "They continue while the process is alive; killing the app stops them. " +
+                "UI talks to HlsDownloadEngine + HlsOfflineLocator (AT-331).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

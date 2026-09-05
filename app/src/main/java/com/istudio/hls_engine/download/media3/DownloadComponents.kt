@@ -12,7 +12,6 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import androidx.media3.exoplayer.offline.DownloadManager
-import androidx.media3.exoplayer.offline.DownloadNotificationHelper
 import java.io.File
 import java.util.concurrent.Executor
 
@@ -25,12 +24,10 @@ import java.util.concurrent.Executor
 object DownloadComponents {
 
     const val HLS_CACHE_DIR_NAME = "hls_download_cache"
-    const val DOWNLOAD_NOTIFICATION_CHANNEL_ID = "hls_download_channel"
 
     @Volatile private var databaseProvider: DatabaseProvider? = null
     @Volatile private var downloadCache: Cache? = null
     @Volatile private var downloadManager: DownloadManager? = null
-    @Volatile private var downloadNotificationHelper: DownloadNotificationHelper? = null
     @Volatile private var httpDataSourceFactory: DefaultHttpDataSource.Factory? = null
 
     fun httpDataSourceFactory(context: Context): DefaultHttpDataSource.Factory {
@@ -65,14 +62,6 @@ object DownloadComponents {
         }
     }
 
-    fun getDownloadNotificationHelper(context: Context): DownloadNotificationHelper {
-        return downloadNotificationHelper ?: synchronized(this) {
-            downloadNotificationHelper
-                ?: DownloadNotificationHelper(context, DOWNLOAD_NOTIFICATION_CHANNEL_ID)
-                    .also { downloadNotificationHelper = it }
-        }
-    }
-
     fun readOnlyCacheDataSourceFactory(context: Context): CacheDataSource.Factory =
         CacheDataSource.Factory()
             .setCache(getDownloadCache(context))
@@ -100,7 +89,7 @@ object DownloadComponents {
             httpDataSourceFactory(context),
             executor,
         ).apply {
-            maxParallelDownloads = 2 // AT-331 default concurrent HLS
+            maxParallelDownloads = 2
         }
     }
 }

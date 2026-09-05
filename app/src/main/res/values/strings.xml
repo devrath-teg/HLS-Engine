@@ -1,4 +1,3 @@
 <resources>
     <string name="app_name">HLS-Engine</string>
-    <string name="download_notification_channel_name">HLS downloads</string>
 </resources>
