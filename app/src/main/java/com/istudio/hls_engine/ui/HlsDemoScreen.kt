@@ -23,8 +23,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -38,32 +38,37 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import com.istudio.hls_engine.Constants
-import com.istudio.hls_engine.download.HlsDownloadStore
+import com.istudio.hls_engine.download.api.HlsDownloadState
+import com.istudio.hls_engine.download.api.HlsEnqueueRequest
+import com.istudio.hls_engine.download.media3.DownloadComponents
+import com.istudio.hls_engine.download.media3.Media3HlsDownloadEngine
+import com.istudio.hls_engine.download.media3.Media3HlsOfflineLocator
 import com.istudio.hls_engine.player.HlsPlayerFactory
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 import java.security.MessageDigest
 
 @OptIn(UnstableApi::class)
 @Composable
 fun HlsDemoScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val store = remember { HlsDownloadStore.get(context) }
+    val engine = remember { Media3HlsDownloadEngine.get(context) }
+    val locator = remember { Media3HlsOfflineLocator.get(context, engine) }
     val scope = rememberCoroutineScope()
 
     var urlText by remember { mutableStateOf(Constants.HLS_REMOTE_URL) }
     var contentId by remember { mutableStateOf(contentIdFor(Constants.HLS_REMOTE_URL)) }
     var status by remember { mutableStateOf("Idle") }
     var playbackSource by remember { mutableStateOf("—") }
-    var downloadProgress by remember { mutableFloatStateOf(0f) }
-    var isDownloading by remember { mutableStateOf(false) }
-    var isDownloaded by remember {
-        mutableStateOf(store.isDownloaded(contentIdFor(Constants.HLS_REMOTE_URL)))
-    }
 
-    val player = remember { HlsPlayerFactory.create(context) }
+    val statesFlow = remember(engine) { engine.observeStates() }
+    val states by statesFlow.collectAsState(initial = emptyMap())
+    val state = states[contentId] ?: engine.getState(contentId)
+    val isDownloaded = state is HlsDownloadState.Downloaded
+    val isDownloading = state is HlsDownloadState.Downloading || state is HlsDownloadState.Queued
+    val downloadProgress = state.percent
+    val bytesDownloaded = (state as? HlsDownloadState.Downloading)?.bytesDownloaded ?: 0L
+
+    val player = remember { HlsPlayerFactory.create(context, locator) }
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -79,8 +84,8 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
         }
     }
 
-    val downloadPath = remember(contentId) {
-        File(context.filesDir, "${HlsDownloadStore.DOWNLOAD_DIR_NAME}/$contentId").absolutePath
+    val cachePath = remember {
+        DownloadComponents.cacheDirectory(context).absolutePath
     }
 
     Column(
@@ -97,7 +102,6 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
             onValueChange = {
                 urlText = it
                 contentId = contentIdFor(it.trim())
-                isDownloaded = store.isDownloaded(contentId)
             },
             label = { Text("Remote .m3u8 URL") },
             modifier = Modifier.fillMaxWidth(),
@@ -110,9 +114,13 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "Download folder:\n$downloadPath/cache",
+            text = "Cache (spec: hls_download_cache):\n$cachePath",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "Engine state: ${state::class.simpleName} (${"%.1f".format(downloadProgress)}%)",
+            style = MaterialTheme.typography.bodyMedium,
         )
         Text(
             text = "Source: $playbackSource",
@@ -125,11 +133,23 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
         )
 
         if (isDownloading) {
-            LinearProgressIndicator(
-                progress = { downloadProgress / 100f },
-                modifier = Modifier.fillMaxWidth(),
+            if (downloadProgress > 0f) {
+                LinearProgressIndicator(
+                    progress = { downloadProgress / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+            Text(
+                text = if (downloadProgress > 0f) {
+                    "Downloading… ${"%.1f".format(downloadProgress)}%" +
+                        if (bytesDownloaded > 0) " (${formatBytes(bytesDownloaded)})" else ""
+                } else {
+                    "Downloading…" +
+                        if (bytesDownloaded > 0) " ${formatBytes(bytesDownloaded)}" else ""
+                },
             )
-            Text("Downloading… ${"%.1f".format(downloadProgress)}%")
         }
 
         AndroidView(
@@ -156,7 +176,7 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
             Button(
                 onClick = {
                     val uri = Uri.parse(urlText.trim())
-                    player.setMediaSource(HlsPlayerFactory.remoteMediaSource(store, uri))
+                    player.setMediaItem(HlsPlayerFactory.remoteMediaItem(uri))
                     player.prepare()
                     player.playWhenReady = true
                     playbackSource = "Remote"
@@ -170,21 +190,18 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
 
             Button(
                 onClick = {
-                    val id = contentId
-                    if (!store.isDownloaded(id)) {
+                    val mediaItem = HlsPlayerFactory.offlineMediaItem(locator, contentId)
+                    if (mediaItem == null) {
                         status = "Not downloaded yet"
                         return@Button
                     }
-                    val uri = store.savedPlaylistUri(id) ?: Uri.parse(urlText.trim())
                     player.stop()
                     player.clearMediaItems()
-                    player.setMediaSource(
-                        HlsPlayerFactory.offlineMediaSource(store, id, uri),
-                    )
+                    player.setMediaItem(mediaItem)
                     player.prepare()
                     player.playWhenReady = true
                     playbackSource = "Local cache"
-                    status = "Playing from $downloadPath/cache"
+                    status = "Playing offline via HlsOfflineLocator"
                 },
                 modifier = Modifier.weight(1f),
                 enabled = isDownloaded && !isDownloading,
@@ -200,25 +217,18 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
             Button(
                 onClick = {
                     val uri = Uri.parse(urlText.trim())
-                    val id = contentId
-                    isDownloading = true
-                    downloadProgress = 0f
-                    status = "Starting HLS download…"
+                    status = "Enqueueing via HlsDownloadEngine…"
                     scope.launch {
-                        try {
-                            withContext(Dispatchers.IO) {
-                                store.download(id, uri) { percent ->
-                                    downloadProgress = percent.coerceIn(0f, 100f)
-                                }
-                            }
-                            isDownloaded = true
-                            status = "Download complete → $downloadPath/cache"
-                        } catch (e: Exception) {
-                            isDownloaded = false
-                            status = friendlyDownloadError(e)
-                        } finally {
-                            isDownloading = false
-                        }
+                        val result = engine.enqueue(
+                            HlsEnqueueRequest(
+                                contentId = contentId,
+                                masterPlaylistUri = uri,
+                            ),
+                        )
+                        status = result.fold(
+                            onSuccess = { "Download running in DownloadService (survives app close)" },
+                            onFailure = { "Enqueue failed: ${it.message}" },
+                        )
                     }
                 },
                 modifier = Modifier.weight(1f),
@@ -230,13 +240,12 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
             OutlinedButton(
                 onClick = {
                     player.stop()
-                    store.remove(contentId)
-                    isDownloaded = false
+                    engine.remove(contentId)
                     playbackSource = "—"
-                    status = "Removed local download"
+                    status = "Removed via HlsDownloadEngine"
                 },
                 modifier = Modifier.weight(1f),
-                enabled = isDownloaded && !isDownloading,
+                enabled = isDownloaded || isDownloading,
             ) {
                 Text("Remove")
             }
@@ -244,8 +253,8 @@ fun HlsDemoScreen(modifier: Modifier = Modifier) {
 
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "HLS uses Media3 HlsDownloader + SimpleCache under the download folder " +
-                "(segments, not a single progressive file).",
+            text = "UI talks only to HlsDownloadEngine + HlsOfflineLocator — the same " +
+                "boundaries LiskovDownloadManager / PlayerKit should use (AT-331).",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -259,16 +268,10 @@ private fun contentIdFor(url: String): String {
     return digest.joinToString("") { "%02x".format(it) }.take(16)
 }
 
-private fun friendlyDownloadError(e: Exception): String {
-    val root = generateSequence(e as Throwable) { it.cause }.last()
-    val detail = root.message ?: e.message ?: e.javaClass.simpleName
-    return when {
-        detail.contains("socket", ignoreCase = true) ||
-            detail.contains("Connection reset", ignoreCase = true) ->
-            "Download failed: connection dropped (retry Download). $detail"
-        root is java.net.UnknownHostException ->
-            "Download failed: host unreachable / no network ($detail)"
-        else ->
-            "Download failed: $detail"
-    }
+private fun formatBytes(bytes: Long): String {
+    if (bytes < 1024) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024) return "%.1f KB".format(kb)
+    val mb = kb / 1024.0
+    return "%.1f MB".format(mb)
 }
