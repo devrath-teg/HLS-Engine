@@ -201,8 +201,9 @@ class Media3HlsDownloadEngine(
                     .setDataSourceFactory(DownloadComponents.httpDataSourceFactory(appContext))
                     .create(MediaItem.fromUri(request.masterPlaylistUri))
 
+                // Prefer the highest available video bitrate for offline download.
                 val params = TrackSelectionParameters.Builder(appContext)
-                    .setMinVideoBitrate(request.minVideoBitrateBps)
+                    .setForceHighestSupportedBitrate(true)
                     .build()
 
                 helper.prepare(
