@@ -16,11 +16,14 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import com.istudio.hls_engine.download.api.HlsDownloadEngine
 import com.istudio.hls_engine.download.api.HlsDownloadState
 import com.istudio.hls_engine.download.api.HlsEnqueueRequest
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import java.io.IOException
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
@@ -33,8 +36,9 @@ import kotlin.coroutines.suspendCoroutine
  * If the process is killed, active downloads stop.
  */
 @OptIn(UnstableApi::class)
-class Media3HlsDownloadEngine(
-    context: Context,
+@Singleton
+class Media3HlsDownloadEngine @Inject constructor(
+    @ApplicationContext context: Context,
 ) : HlsDownloadEngine {
 
     private val appContext = context.applicationContext
@@ -275,14 +279,5 @@ class Media3HlsDownloadEngine(
     companion object {
         const val STOP_REASON_USER = 1
         private const val PROGRESS_POLL_MS = 500L
-
-        @Volatile
-        private var instance: Media3HlsDownloadEngine? = null
-
-        fun get(context: Context): Media3HlsDownloadEngine {
-            return instance ?: synchronized(this) {
-                instance ?: Media3HlsDownloadEngine(context).also { instance = it }
-            }
-        }
     }
 }

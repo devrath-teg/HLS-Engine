@@ -9,14 +9,18 @@ import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.exoplayer.offline.Download
 import com.istudio.hls_engine.download.api.HlsDownloadEngine
 import com.istudio.hls_engine.download.api.HlsOfflineLocator
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * PlayerKit-facing offline bridge. Depends on [HlsDownloadEngine] for identity /
  * completion checks and on [DownloadComponents] for the isolated download cache.
  */
 @OptIn(UnstableApi::class)
-class Media3HlsOfflineLocator(
-    context: Context,
+@Singleton
+class Media3HlsOfflineLocator @Inject constructor(
+    @ApplicationContext context: Context,
     private val engine: HlsDownloadEngine,
 ) : HlsOfflineLocator {
 
@@ -38,9 +42,4 @@ class Media3HlsOfflineLocator(
 
     override fun remoteDataSourceFactory(): DataSource.Factory =
         DownloadComponents.remoteDataSourceFactory(appContext)
-
-    companion object {
-        fun get(context: Context, engine: HlsDownloadEngine = Media3HlsDownloadEngine.get(context)) =
-            Media3HlsOfflineLocator(context, engine)
-    }
 }
