@@ -28,16 +28,6 @@ object HlsPlayerFactory {
             .build()
     }
 
-    fun remoteMediaItem(playlistUri: Uri): MediaItem =
-        MediaItem.Builder()
-            .setUri(playlistUri)
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle("HLS remote")
-                    .build(),
-            )
-            .build()
-
     fun offlineMediaItem(locator: HlsOfflineLocator, contentId: String): MediaItem? {
         val item = locator.mediaItemForOffline(contentId) ?: return null
         return item.buildUpon()
@@ -49,7 +39,19 @@ object HlsPlayerFactory {
             .build()
     }
 
+    /** Streaming-only source (HTTP). Used by [com.istudio.hls_engine.ui.HlsDemoViewModel.playRemote]. */
     fun remoteMediaSource(locator: HlsOfflineLocator, playlistUri: Uri): MediaSource =
         HlsMediaSource.Factory(locator.remoteDataSourceFactory())
             .createMediaSource(remoteMediaItem(playlistUri))
+
+
+    private fun remoteMediaItem(playlistUri: Uri): MediaItem =
+        MediaItem.Builder()
+            .setUri(playlistUri)
+            .setMediaMetadata(
+                MediaMetadata.Builder()
+                    .setTitle("HLS remote")
+                    .build(),
+            )
+            .build()
 }

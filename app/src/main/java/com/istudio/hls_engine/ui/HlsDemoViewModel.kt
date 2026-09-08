@@ -95,7 +95,10 @@ class HlsDemoViewModel @Inject constructor(
     fun playRemote() {
         val uri = Uri.parse(urlText.value.trim())
         if (urlText.value.isBlank()) return
-        player.setMediaItem(HlsPlayerFactory.remoteMediaItem(uri))
+        player.stop()
+        player.clearMediaItems()
+        // Pure HTTP HlsMediaSource (not the download-cache factory used for offline).
+        player.setMediaSource(HlsPlayerFactory.remoteMediaSource(locator, uri))
         player.prepare()
         player.playWhenReady = true
         playbackSource.value = "Remote"
