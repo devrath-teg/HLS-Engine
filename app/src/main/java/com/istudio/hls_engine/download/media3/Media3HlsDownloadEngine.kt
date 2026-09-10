@@ -117,8 +117,14 @@ class Media3HlsDownloadEngine @Inject constructor(
         }
     }
 
+    /**
+     * Current status for [contentId].
+     *
+     * Checks [DownloadManager.currentDownloads] first (in-memory, best
+     * percentDownloaded while active), then falls back to [DownloadIndex]
+     * (persisted completed / failed / queued rows).
+     */
     override fun getState(contentId: String): HlsDownloadState {
-        // Prefer in-memory currentDownloads for freshest percentDownloaded.
         downloadManager.currentDownloads
             .firstOrNull { it.request.id == contentId }
             ?.let { return it.toHlsState() }
@@ -128,8 +134,15 @@ class Media3HlsDownloadEngine @Inject constructor(
     }
 
     /**
-     * Media3's [DownloadManager.Listener] only fires on state changes, not percent updates.
-     * Polling is the supported way to surface progress (same approach as DownloadService).
+     * All downloads as a map, refreshed every [PROGRESS_POLL_MS].
+     *
+     * Why poll? Media3 [DownloadManager.Listener] only notifies on **state**
+     * changes (queued → downloading → completed). It does **not** fire as
+     * percentDownloaded increases. Official guidance is to poll
+     * (DownloadService does the same for notifications).
+     *
+     * [distinctUntilChanged] skips identical maps so idle collectors don't
+     * spam UI. The loop runs only while someone is collecting this Flow.
      */
     override fun observeStates(): Flow<Map<String, HlsDownloadState>> = flow {
         while (true) {
@@ -138,6 +151,24 @@ class Media3HlsDownloadEngine @Inject constructor(
         }
     }.distinctUntilChanged()
 
+    /**
+     * Single-[contentId] variant of [observeStates].
+     *
+     * Same polling rationale: emit [getState] every [PROGRESS_POLL_MS] so UI
+     * can bind `state.percent` on a download button / progress ring.
+     *
+     * Example:
+     * ```
+     * engine.observeState(eventId).collect { state ->
+     *     when (state) {
+     *         is HlsDownloadState.Downloading -> showProgress(state.percent)
+     *         is HlsDownloadState.Downloaded -> showReady()
+     *         is HlsDownloadState.Failed -> showError(state.message)
+     *         else -> showIdle()
+     *     }
+     * }
+     * ```
+     */
     override fun observeState(contentId: String): Flow<HlsDownloadState> = flow {
         while (true) {
             emit(getState(contentId))
@@ -145,9 +176,15 @@ class Media3HlsDownloadEngine @Inject constructor(
         }
     }.distinctUntilChanged()
 
+    /**
+     * Builds contentId → state for every known download.
+     *
+     * 1. [DownloadManager.currentDownloads] — active jobs, freshest progress
+     * 2. [DownloadIndex] — everything else (completed, failed, stopped);
+     *    [putIfAbsent] so live entries are not overwritten by stale index rows
+     */
     private fun snapshotStates(): Map<String, HlsDownloadState> {
         val result = linkedMapOf<String, HlsDownloadState>()
-        // Live downloads first — freshest percentDownloaded.
         downloadManager.currentDownloads.forEach { download ->
             result[download.request.id] = download.toHlsState()
         }
@@ -215,6 +252,7 @@ class Media3HlsDownloadEngine @Inject constructor(
             }
         }
 
+    /** Maps Media3 [Download] → app [HlsDownloadState] (including percent 0–100). */
     private fun Download.toHlsState(): HlsDownloadState {
         val percent = normalizedPercent()
         return when (state) {
@@ -240,6 +278,7 @@ class Media3HlsDownloadEngine @Inject constructor(
         }
     }
 
+    /** Media3 may report [Download.PERCENTAGE_UNSET] (-1); treat that as 0. */
     private fun Download.normalizedPercent(): Float {
         val raw = percentDownloaded
         return if (raw < 0f) 0f else raw.coerceIn(0f, 100f)
@@ -247,6 +286,7 @@ class Media3HlsDownloadEngine @Inject constructor(
 
     companion object {
         const val STOP_REASON_USER = 1
+        /** How often [observeState] / [observeStates] re-read progress while collected. */
         private const val PROGRESS_POLL_MS = 500L
     }
 }
