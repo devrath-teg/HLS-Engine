@@ -20,6 +20,8 @@ interface HlsDownloadEngine {
     fun remove(contentId: String)
     fun getState(contentId: String): HlsDownloadState
     fun observeStates(): Flow<Map<String, HlsDownloadState>>
+    /** Live status + progress for a single [contentId]. */
+    fun observeState(contentId: String): Flow<HlsDownloadState>
     fun isDownloaded(contentId: String): Boolean
 
     @OptIn(UnstableApi::class)

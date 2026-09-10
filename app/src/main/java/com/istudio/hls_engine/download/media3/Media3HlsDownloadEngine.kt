@@ -17,16 +17,17 @@ import com.istudio.hls_engine.download.api.HlsDownloadEngine
 import com.istudio.hls_engine.download.api.HlsDownloadState
 import com.istudio.hls_engine.download.api.HlsEnqueueRequest
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import kotlin.coroutines.suspendCoroutine
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Media3-backed [HlsDownloadEngine] using in-process [DownloadManager] only
@@ -117,79 +118,47 @@ class Media3HlsDownloadEngine @Inject constructor(
     }
 
     override fun getState(contentId: String): HlsDownloadState {
+        // Prefer in-memory currentDownloads for freshest percentDownloaded.
+        downloadManager.currentDownloads
+            .firstOrNull { it.request.id == contentId }
+            ?.let { return it.toHlsState() }
         val download = downloadManager.downloadIndex.getDownload(contentId)
             ?: return HlsDownloadState.Idle(contentId)
         return download.toHlsState()
     }
 
-    override fun observeStates(): Flow<Map<String, HlsDownloadState>> = callbackFlow {
-        fun snapshot(): Map<String, HlsDownloadState> {
-            val result = linkedMapOf<String, HlsDownloadState>()
-            downloadManager.currentDownloads.forEach { download ->
-                result[download.request.id] = download.toHlsState()
-            }
-            downloadManager.downloadIndex.getDownloads().use { cursor ->
-                while (cursor.moveToNext()) {
-                    val download = cursor.download
-                    result.putIfAbsent(download.request.id, download.toHlsState())
-                }
-            }
-            return result
-        }
-
-        fun hasActiveWork(states: Map<String, HlsDownloadState>): Boolean =
-            states.values.any {
-                it is HlsDownloadState.Downloading ||
-                    it is HlsDownloadState.Queued ||
-                    it is HlsDownloadState.Removing
-            }
-
-        val progressTicker = object : Runnable {
-            override fun run() {
-                val states = snapshot()
-                trySend(states)
-                if (hasActiveWork(states)) {
-                    mainHandler.postDelayed(this, PROGRESS_POLL_MS)
-                }
-            }
-        }
-
-        fun scheduleProgressPolling() {
-            mainHandler.removeCallbacks(progressTicker)
-            mainHandler.post(progressTicker)
-        }
-
-        trySend(snapshot())
-        val listener = object : DownloadManager.Listener {
-            override fun onInitialized(downloadManager: DownloadManager) {
-                scheduleProgressPolling()
-            }
-
-            override fun onDownloadChanged(
-                downloadManager: DownloadManager,
-                download: Download,
-                finalException: Exception?,
-            ) {
-                scheduleProgressPolling()
-            }
-
-            override fun onDownloadRemoved(downloadManager: DownloadManager, download: Download) {
-                scheduleProgressPolling()
-            }
-
-            override fun onIdle(downloadManager: DownloadManager) {
-                trySend(snapshot())
-                mainHandler.removeCallbacks(progressTicker)
-            }
-        }
-        downloadManager.addListener(listener)
-        scheduleProgressPolling()
-
-        awaitClose {
-            downloadManager.removeListener(listener)
-            mainHandler.removeCallbacks(progressTicker)
+    /**
+     * Media3's [DownloadManager.Listener] only fires on state changes, not percent updates.
+     * Polling is the supported way to surface progress (same approach as DownloadService).
+     */
+    override fun observeStates(): Flow<Map<String, HlsDownloadState>> = flow {
+        while (true) {
+            emit(snapshotStates())
+            delay(PROGRESS_POLL_MS.milliseconds)
         }
     }.distinctUntilChanged()
+
+    override fun observeState(contentId: String): Flow<HlsDownloadState> = flow {
+        while (true) {
+            emit(getState(contentId))
+            delay(PROGRESS_POLL_MS.milliseconds)
+        }
+    }.distinctUntilChanged()
+
+    private fun snapshotStates(): Map<String, HlsDownloadState> {
+        val result = linkedMapOf<String, HlsDownloadState>()
+        // Live downloads first — freshest percentDownloaded.
+        downloadManager.currentDownloads.forEach { download ->
+            result[download.request.id] = download.toHlsState()
+        }
+        downloadManager.downloadIndex.getDownloads().use { cursor ->
+            while (cursor.moveToNext()) {
+                val download = cursor.download
+                result.putIfAbsent(download.request.id, download.toHlsState())
+            }
+        }
+        return result
+    }
 
     override fun isDownloaded(contentId: String): Boolean =
         getState(contentId) is HlsDownloadState.Downloaded
