@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -217,7 +218,7 @@ class Media3HlsDownloadEngine @Inject constructor(
         downloadManager.downloadIndex.getDownload(contentId)?.request
 
     private suspend fun prepareDownloadRequest(request: HlsEnqueueRequest): DownloadRequest =
-        suspendCoroutine { cont ->
+        suspendCancellableCoroutine { cont ->
             mainHandler.post {
                 val helper = DownloadHelper.Factory()
                     .setRenderersFactory(DefaultRenderersFactory(appContext))
