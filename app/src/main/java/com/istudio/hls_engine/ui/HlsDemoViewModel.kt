@@ -34,6 +34,18 @@ import javax.inject.Inject
  *
  * Talks to [HlsDownloadEngine] + [HlsOfflineLocator] (AT-331 shape); Media3 stays
  * behind those APIs.
+ *
+ * ## Download progress subscription
+ *
+ * UI state is driven by [HlsDownloadEngine.observeState] for the **current** URL's
+ * contentId (not a map of all downloads).
+ *
+ * - [flatMapLatest]: when the URL changes, the previous contentId Flow is
+ *   **cancelled** → engine [awaitClose] removes that Media3 listener / poll.
+ * - [SharingStarted.WhileSubscribed]: when Compose leaves and nothing collects
+ *   for 5s, upstream is cancelled the same way (full unsubscribe).
+ * - While Downloaded/Idle, the engine itself already stops the 500ms poll; the
+ *   ViewModel can stay subscribed without burning CPU on percent ticks.
  */
 @OptIn(UnstableApi::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -59,6 +71,10 @@ class HlsDemoViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Re-subscribes [HlsDownloadEngine.observeState] whenever [urlText] changes.
+     * See class KDoc for how that cancels the previous contentId listener.
+     */
     val uiState: StateFlow<HlsDemoUiState> = urlText
         .flatMapLatest { url ->
             val contentId = contentIdFor(url.trim())
@@ -79,6 +95,7 @@ class HlsDemoViewModel @Inject constructor(
         }
         .stateIn(
             scope = viewModelScope,
+            // No UI collectors for 5s → cancel observeState (listener + poll).
             started = SharingStarted.WhileSubscribed(5_000),
             initialValue = HlsDemoUiState(
                 urlText = Constants.HLS_REMOTE_URL,
@@ -162,6 +179,10 @@ class HlsDemoViewModel @Inject constructor(
     }
 
     companion object {
+        /**
+         * POC-only: derive an id from the typed URL (SHA-256 prefix).
+         * Production should pass a stable Insider event / TEG id instead.
+         */
         fun contentIdFor(url: String): String {
             if (url.isBlank()) return "empty"
             val digest = MessageDigest.getInstance("SHA-256")

@@ -34,9 +34,13 @@ interface HlsDownloadEngine {
     /**
      * Observe status + progress for one [contentId].
      *
-     * Emits [HlsDownloadState] (e.g. [HlsDownloadState.Downloading.percent]) until
-     * the collector is cancelled. Maps cleanly onto Liskov's
-     * `ObserveSingleDownloadStatusUseCase`.
+     * - Polls percent **only** while [HlsDownloadState.isActive].
+     * - Stops the 500ms loop when completed / failed / idle / stopped.
+     * - Media3 listener stays until the collector cancels (leave UI,
+     *   `WhileSubscribed`, or contentId change via `flatMapLatest`).
+     *
+     * See [com.istudio.hls_engine.download.media3.Media3HlsDownloadEngine.observeState]
+     * for the full lifecycle notes.
      */
     fun observeState(contentId: String): Flow<HlsDownloadState>
 

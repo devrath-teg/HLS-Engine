@@ -17,10 +17,14 @@ import com.istudio.hls_engine.download.api.HlsDownloadEngine
 import com.istudio.hls_engine.download.api.HlsDownloadState
 import com.istudio.hls_engine.download.api.HlsEnqueueRequest
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -134,15 +138,26 @@ class Media3HlsDownloadEngine @Inject constructor(
     }
 
     /**
-     * Live status + progress for one [contentId], refreshed every [PROGRESS_POLL_MS].
+     * Live status + progress for one [contentId].
      *
-     * Why poll? Media3 [DownloadManager.Listener] only notifies on **state**
-     * changes (queued → downloading → completed). It does **not** fire as
-     * percentDownloaded increases. Official guidance is to poll
-     * (DownloadService does the same for notifications).
+     * ## Why this is not a simple `while (true) { emit; delay(500) }`
      *
-     * [distinctUntilChanged] skips identical emissions so idle collectors don't
-     * spam UI. The loop runs only while someone is collecting this Flow.
+     * Media3 [DownloadManager.Listener] notifies only on **state** changes
+     * (queued → downloading → completed / removed). It does **not** notify as
+     * `percentDownloaded` increases. So we still need a short poll for the
+     * progress bar — but we only poll while [HlsDownloadState.isActive].
+     *
+     * ## Lifecycle (two layers)
+     *
+     * 1. **Active download** → poll every [PROGRESS_POLL_MS] for percent.
+     *    When state becomes inactive (Downloaded / Failed / Idle / Stopped),
+     *    the poll job **exits**. No more 500ms wakeups.
+     * 2. **Inactive but still collected** → only the Media3 listener remains.
+     *    Cheap: fires on remove / re-enqueue / pause-resume, then may restart
+     *    the poll if the id is active again.
+     * 3. **Collector cancelled** → [awaitClose] runs: remove listener + cancel
+     *    poll. Triggers from UI: leave screen, [SharingStarted.WhileSubscribed]
+     *    timeout, or [flatMapLatest] when the URL / contentId changes.
      *
      * Example:
      * ```
@@ -156,12 +171,75 @@ class Media3HlsDownloadEngine @Inject constructor(
      * }
      * ```
      */
-    override fun observeState(contentId: String): Flow<HlsDownloadState> = flow {
-        while (true) {
-            emit(getState(contentId))
-            delay(PROGRESS_POLL_MS.milliseconds)
+    override fun observeState(contentId: String): Flow<HlsDownloadState> =
+        observeDownloadState(contentId)
+            .distinctUntilChanged() // skip identical states so Compose does not recompose for free
+
+    /**
+     * Builds the cold Flow that listens + polls for [contentId].
+     * See [observeState] for lifecycle details.
+     */
+    private fun observeDownloadState(contentId: String): Flow<HlsDownloadState> = callbackFlow {
+        // Job that polls percent; null / inactive when download is not in flight.
+        var progressJob: Job? = null
+
+        /**
+         * Push latest state to collectors, then start or stop the percent poll.
+         *
+         * Called on: first subscribe, Media3 onDownloadChanged, onDownloadRemoved.
+         */
+        fun emitAndMaybePoll() {
+            val state = getState(contentId)
+            trySend(state)
+
+            if (state.isActive) {
+                // Already polling this id — avoid stacking duplicate jobs.
+                if (progressJob?.isActive == true) return
+                progressJob = launch {
+                    // Percent poll loop — Media3 does not push % updates.
+                    while (isActive) {
+                        val current = getState(contentId)
+                        trySend(current)
+                        // Completed / failed / idle / stopped → stop waking every 500ms.
+                        if (!current.isActive) break
+                        delay(PROGRESS_POLL_MS.milliseconds)
+                    }
+                }
+            } else {
+                // Not transferring — ensure any leftover poll is torn down.
+                progressJob?.cancel()
+                progressJob = null
+            }
         }
-    }.distinctUntilChanged()
+
+        // Wakes us on state transitions only (not on percent ticks).
+        val listener = object : DownloadManager.Listener {
+            override fun onDownloadChanged(
+                downloadManager: DownloadManager,
+                download: Download,
+                finalException: Exception?,
+            ) {
+                // Ignore other contentIds sharing this DownloadManager.
+                if (download.request.id == contentId) emitAndMaybePoll()
+            }
+
+            override fun onDownloadRemoved(
+                downloadManager: DownloadManager,
+                download: Download,
+            ) {
+                if (download.request.id == contentId) emitAndMaybePoll()
+            }
+        }
+
+        downloadManager.addListener(listener)
+        emitAndMaybePoll() // initial snapshot (+ start poll if already active)
+
+        // Full unsubscribe when nobody is collecting this Flow anymore.
+        awaitClose {
+            progressJob?.cancel()
+            downloadManager.removeListener(listener)
+        }
+    }
 
     override fun isDownloaded(contentId: String): Boolean =
         getState(contentId) is HlsDownloadState.Downloaded
@@ -252,7 +330,11 @@ class Media3HlsDownloadEngine @Inject constructor(
 
     companion object {
         const val STOP_REASON_USER = 1
-        /** How often [observeState] re-reads progress while collected. */
+        /**
+         * How often we re-read [Download.percentDownloaded] while
+         * [HlsDownloadState.isActive]. Not used once the download is idle —
+         * see [observeState].
+         */
         private const val PROGRESS_POLL_MS = 500L
     }
 }

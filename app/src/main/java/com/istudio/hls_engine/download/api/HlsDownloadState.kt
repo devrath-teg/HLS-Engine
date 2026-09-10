@@ -46,6 +46,14 @@ sealed class HlsDownloadState {
     }
 
     val isTerminalSuccess: Boolean get() = this is Downloaded
+
+    /**
+     * True while work is still in flight for this id.
+     *
+     * Used by [HlsDownloadEngine.observeState] to decide whether to run the
+     * 500ms percent poll. When false (Idle / Downloaded / Failed / Stopped),
+     * polling stops until Media3 reports another state change.
+     */
     val isActive: Boolean
         get() = this is Queued || this is Downloading || this is Removing
 }
