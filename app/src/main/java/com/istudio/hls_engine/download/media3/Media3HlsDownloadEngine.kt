@@ -134,28 +134,15 @@ class Media3HlsDownloadEngine @Inject constructor(
     }
 
     /**
-     * All downloads as a map, refreshed every [PROGRESS_POLL_MS].
+     * Live status + progress for one [contentId], refreshed every [PROGRESS_POLL_MS].
      *
      * Why poll? Media3 [DownloadManager.Listener] only notifies on **state**
      * changes (queued → downloading → completed). It does **not** fire as
      * percentDownloaded increases. Official guidance is to poll
      * (DownloadService does the same for notifications).
      *
-     * [distinctUntilChanged] skips identical maps so idle collectors don't
+     * [distinctUntilChanged] skips identical emissions so idle collectors don't
      * spam UI. The loop runs only while someone is collecting this Flow.
-     */
-    override fun observeStates(): Flow<Map<String, HlsDownloadState>> = flow {
-        while (true) {
-            emit(snapshotStates())
-            delay(PROGRESS_POLL_MS.milliseconds)
-        }
-    }.distinctUntilChanged()
-
-    /**
-     * Single-[contentId] variant of [observeStates].
-     *
-     * Same polling rationale: emit [getState] every [PROGRESS_POLL_MS] so UI
-     * can bind `state.percent` on a download button / progress ring.
      *
      * Example:
      * ```
@@ -175,27 +162,6 @@ class Media3HlsDownloadEngine @Inject constructor(
             delay(PROGRESS_POLL_MS.milliseconds)
         }
     }.distinctUntilChanged()
-
-    /**
-     * Builds contentId → state for every known download.
-     *
-     * 1. [DownloadManager.currentDownloads] — active jobs, freshest progress
-     * 2. [DownloadIndex] — everything else (completed, failed, stopped);
-     *    [putIfAbsent] so live entries are not overwritten by stale index rows
-     */
-    private fun snapshotStates(): Map<String, HlsDownloadState> {
-        val result = linkedMapOf<String, HlsDownloadState>()
-        downloadManager.currentDownloads.forEach { download ->
-            result[download.request.id] = download.toHlsState()
-        }
-        downloadManager.downloadIndex.getDownloads().use { cursor ->
-            while (cursor.moveToNext()) {
-                val download = cursor.download
-                result.putIfAbsent(download.request.id, download.toHlsState())
-            }
-        }
-        return result
-    }
 
     override fun isDownloaded(contentId: String): Boolean =
         getState(contentId) is HlsDownloadState.Downloaded
@@ -286,7 +252,7 @@ class Media3HlsDownloadEngine @Inject constructor(
 
     companion object {
         const val STOP_REASON_USER = 1
-        /** How often [observeState] / [observeStates] re-read progress while collected. */
+        /** How often [observeState] re-reads progress while collected. */
         private const val PROGRESS_POLL_MS = 500L
     }
 }
