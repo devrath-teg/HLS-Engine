@@ -138,38 +138,7 @@ class Media3HlsDownloadEngine @Inject constructor(
     }
 
     /**
-     * Live status + progress for one [contentId].
-     *
-     * ## Why this is not a simple `while (true) { emit; delay(500) }`
-     *
-     * Media3 [DownloadManager.Listener] notifies only on **state** changes
-     * (queued → downloading → completed / removed). It does **not** notify as
-     * `percentDownloaded` increases. So we still need a short poll for the
-     * progress bar — but we only poll while [HlsDownloadState.isActive].
-     *
-     * ## Lifecycle (two layers)
-     *
-     * 1. **Active download** → poll every [PROGRESS_POLL_MS] for percent.
-     *    When state becomes inactive (Downloaded / Failed / Idle / Stopped),
-     *    the poll job **exits**. No more 500ms wakeups.
-     * 2. **Inactive but still collected** → only the Media3 listener remains.
-     *    Cheap: fires on remove / re-enqueue / pause-resume, then may restart
-     *    the poll if the id is active again.
-     * 3. **Collector cancelled** → [awaitClose] runs: remove listener + cancel
-     *    poll. Triggers from UI: leave screen, [SharingStarted.WhileSubscribed]
-     *    timeout, or [flatMapLatest] when the URL / contentId changes.
-     *
-     * Example:
-     * ```
-     * engine.observeState(eventId).collect { state ->
-     *     when (state) {
-     *         is HlsDownloadState.Downloading -> showProgress(state.percent)
-     *         is HlsDownloadState.Downloaded -> showReady()
-     *         is HlsDownloadState.Failed -> showError(state.message)
-     *         else -> showIdle()
-     *     }
-     * }
-     * ```
+     * API: Observe the status of progress from the UI layer
      */
     override fun observeState(contentId: String): Flow<HlsDownloadState> =
         observeDownloadState(contentId)
@@ -177,16 +146,15 @@ class Media3HlsDownloadEngine @Inject constructor(
 
     /**
      * Builds the cold Flow that listens + polls for [contentId].
-     * See [observeState] for lifecycle details.
      */
     private fun observeDownloadState(contentId: String): Flow<HlsDownloadState> = callbackFlow {
+
         // Job that polls percent; null / inactive when download is not in flight.
         var progressJob: Job? = null
 
         /**
          * Push latest state to collectors, then start or stop the percent poll.
-         *
-         * Called on: first subscribe, Media3 onDownloadChanged, onDownloadRemoved.
+         * Called on: ---> first subscribe, Media3 onDownloadChanged, onDownloadRemoved.
          */
         fun emitAndMaybePoll() {
             val state = getState(contentId)
@@ -195,6 +163,7 @@ class Media3HlsDownloadEngine @Inject constructor(
             if (state.isActive) {
                 // Already polling this id — avoid stacking duplicate jobs.
                 if (progressJob?.isActive == true) return
+
                 progressJob = launch {
                     // Percent poll loop — Media3 does not push % updates.
                     while (isActive) {
