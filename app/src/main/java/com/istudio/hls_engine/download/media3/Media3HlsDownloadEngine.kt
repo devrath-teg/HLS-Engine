@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
@@ -225,9 +226,14 @@ class Media3HlsDownloadEngine @Inject constructor(
                     .setDataSourceFactory(DownloadComponents.httpDataSourceFactory(appContext))
                     .create(MediaItem.fromUri(request.masterPlaylistUri))
 
-                // Prefer the highest available video bitrate for offline download.
+                // Highest video bitrate + English / undetermined captions for offline.
                 val params = TrackSelectionParameters.Builder(appContext)
                     .setForceHighestSupportedBitrate(true)
+                    .setPreferredTextLanguage("en")
+                    .setSelectUndeterminedTextLanguage(true)
+                    .setPreferredTextRoleFlags(
+                        C.ROLE_FLAG_CAPTION or C.ROLE_FLAG_SUBTITLE,
+                    )
                     .build()
 
                 helper.prepare(
@@ -241,7 +247,8 @@ class Media3HlsDownloadEngine @Inject constructor(
                                     for (periodIndex in 0 until helper.periodCount) {
                                         helper.clearTrackSelections(periodIndex)
                                         helper.addAudioLanguagesToSelection()
-                                        helper.addTextLanguagesToSelection(false)
+                                        // true = also keep undetermined-language text tracks.
+                                        helper.addTextLanguagesToSelection(true)
                                         helper.addTrackSelection(periodIndex, params)
                                     }
                                 }

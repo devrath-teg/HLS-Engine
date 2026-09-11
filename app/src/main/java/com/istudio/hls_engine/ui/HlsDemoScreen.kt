@@ -116,6 +116,8 @@ fun HlsDemoScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
                     useController = true
+                    // CC button so users can toggle / pick caption tracks.
+                    setShowSubtitleButton(true)
                     player = viewModel.player
                 }
             },

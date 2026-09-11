@@ -3,8 +3,10 @@ package com.istudio.hls_engine.player
 import android.content.Context
 import android.net.Uri
 import androidx.annotation.OptIn
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.TrackSelectionParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -26,6 +28,15 @@ object HlsPlayerFactory {
                     .setDataSourceFactory(locator.readOnlyCacheDataSourceFactory()),
             )
             .build()
+            .also { player ->
+                // ExoPlayer does not auto-enable captions; prefer EN + undetermined
+                // so PlayerView can render WebVTT/TTML when present in the HLS.
+                player.trackSelectionParameters = TrackSelectionParameters.Builder(context)
+                    .setPreferredTextLanguage("en")
+                    .setSelectUndeterminedTextLanguage(true)
+                    .setPreferredTextRoleFlags(C.ROLE_FLAG_CAPTION or C.ROLE_FLAG_SUBTITLE)
+                    .build()
+            }
     }
 
     fun offlineMediaItem(locator: HlsOfflineLocator, contentId: String): MediaItem? {
